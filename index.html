@@ -1,0 +1,1910 @@
+<!DOCTYPE html><html lang="zh-HK"><head><meta name="x-poe-datastore-behavior" content="local_only"><meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://code.jquery.com https://unpkg.com https://d3js.org https://threejs.org https://cdn.plot.ly https://stackpath.bootstrapcdn.com https://maps.googleapis.com https://cdn.tailwindcss.com https://ajax.googleapis.com https://kit.fontawesome.com https://cdn.datatables.net https://maxcdn.bootstrapcdn.com https://code.highcharts.com https://tako-static-assets-production.s3.amazonaws.com https://www.youtube.com https://fonts.googleapis.com https://fonts.gstatic.com https://pfst.cf2.poecdn.net https://puc.poecdn.net https://i.imgur.com https://wikimedia.org https://*.icons8.com https://*.giphy.com https://picsum.photos https://images.unsplash.com; frame-src 'self' https://www.youtube.com https://trytako.com; child-src 'self'; manifest-src 'self'; worker-src 'self'; upgrade-insecure-requests; block-all-mixed-content;"><meta name="x-poe-datastore-behavior" content="local_only"><meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://code.jquery.com https://unpkg.com https://d3js.org https://threejs.org https://cdn.plot.ly https://stackpath.bootstrapcdn.com https://maps.googleapis.com https://cdn.tailwindcss.com https://ajax.googleapis.com https://kit.fontawesome.com https://cdn.datatables.net https://maxcdn.bootstrapcdn.com https://code.highcharts.com https://tako-static-assets-production.s3.amazonaws.com https://www.youtube.com https://fonts.googleapis.com https://fonts.gstatic.com https://pfst.cf2.poecdn.net https://puc.poecdn.net https://i.imgur.com https://wikimedia.org https://*.icons8.com https://*.giphy.com https://picsum.photos https://images.unsplash.com; frame-src 'self' https://www.youtube.com https://trytako.com; child-src 'self'; manifest-src 'self'; worker-src 'self'; upgrade-insecure-requests; block-all-mixed-content;"><meta name="x-poe-datastore-behavior" content="local_only"><meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://code.jquery.com https://unpkg.com https://d3js.org https://threejs.org https://cdn.plot.ly https://stackpath.bootstrapcdn.com https://maps.googleapis.com https://cdn.tailwindcss.com https://ajax.googleapis.com https://kit.fontawesome.com https://cdn.datatables.net https://maxcdn.bootstrapcdn.com https://code.highcharts.com https://tako-static-assets-production.s3.amazonaws.com https://www.youtube.com https://fonts.googleapis.com https://fonts.gstatic.com https://pfst.cf2.poecdn.net https://puc.poecdn.net https://i.imgur.com https://wikimedia.org https://*.icons8.com https://*.giphy.com https://picsum.photos https://images.unsplash.com; frame-src 'self' https://www.youtube.com https://trytako.com; child-src 'self'; manifest-src 'self'; worker-src 'self'; upgrade-insecure-requests; block-all-mixed-content;">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>送貨模擬器 🚚</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#5D5CDE',
+                    }
+                }
+            }
+        }
+
+        // Auto-stage / autoplay functions
+        function startAutoStage() {
+            if (gameState.autoRun) return;
+            gameState.autoRun = true;
+
+            const btn = document.getElementById('auto-stage-btn');
+            if (btn) {
+                btn.textContent = '⏸️ 停止自動闖關';
+            }
+
+            // Run every 800ms: accept order if available, otherwise generate and accept
+            gameState.autoRunInterval = setInterval(() => {
+                // If game not running, start in free mode (so timers exist)
+                if (!gameState.isRunning) {
+                    startGame();
+                }
+
+                // If there's no current delivery, try to accept the highest reward order
+                if (!gameState.currentDelivery) {
+                    if (gameState.orders.length === 0) {
+                        // generate a new order immediately
+                        generateOrder();
+                    }
+
+                    // pick the highest reward order
+                    let best = null;
+                    for (const o of gameState.orders) {
+                        if (!best || o.reward > best.reward) best = o;
+                    }
+                    if (best) acceptOrder(best.id);
+                } else {
+                    // deliver to current destination immediately
+                    deliverToBuilding(gameState.currentDelivery.destination);
+                }
+            }, 800);
+        }
+
+        function stopAutoStage() {
+            if (gameState.autoRunInterval) {
+                clearInterval(gameState.autoRunInterval);
+                gameState.autoRunInterval = null;
+            }
+            gameState.autoRun = false;
+            const btn = document.getElementById('auto-stage-btn');
+            if (btn) {
+                btn.textContent = '🔁 自動闖關 1→100';
+            }
+        }
+
+        function toggleAutoStage() {
+            if (gameState.autoRun) stopAutoStage(); else startAutoStage();
+        }
+    </script>
+    <style>
+        @keyframes delivery-move {
+            0% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+            100% { transform: translateY(0); }
+        }
+        .delivery-animate {
+            animation: delivery-move 1s ease-in-out infinite;
+        }
+        .building {
+            transition: all 0.3s ease;
+        }
+        @media (hover: hover) {
+            .building:hover {
+                transform: scale(1.05);
+            }
+        }
+        @media (hover: none) {
+            .building:active {
+                transform: scale(0.95);
+            }
+        }
+        .order-card {
+            transition: all 0.3s ease;
+        }
+        @media (hover: hover) {
+            .order-card:hover {
+                transform: translateX(5px);
+            }
+        }
+        @media (hover: none) {
+            .order-card:active {
+                transform: scale(0.98);
+            }
+        }
+        @keyframes levelUp {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+        .level-up-animation {
+            animation: levelUp 0.5s ease-in-out;
+        }
+    </style>
+<script src="https://puc.poecdn.net/authenticated_preview_page/syncedState.3f7572448765332f3047.js"></script><script src="https://puc.poecdn.net/authenticated_preview_page/syncedState.3f7572448765332f3047.js"></script><script src="https://puc.poecdn.net/authenticated_preview_page/syncedState.3f7572448765332f3047.js"></script></head>
+<body class="bg-white dark:bg-[#181818] text-gray-900 dark:text-gray-100 transition-colors">
+    <div class="min-h-screen p-4 md:p-6">
+        <!-- Header -->
+        <div class="max-w-7xl mx-auto mb-6">
+            <div class="bg-gradient-to-r from-primary to-purple-600 rounded-xl shadow-lg p-6 mb-6">
+                <div class="flex items-center justify-between flex-wrap gap-3">
+                    <div>
+                        <h1 class="text-3xl md:text-4xl font-bold text-white mb-2 flex items-center gap-3">
+                            🚚 送貨模擬器
+                        </h1>
+                        <p class="text-white/90 text-base" id="game-mode-text">成為最佳送貨員！準時送達，賺取收入！</p>
+                    </div>
+                    <div class="flex gap-3">
+                        <div id="stage-info" class="hidden bg-white/20 backdrop-blur-sm rounded-lg px-4 py-3 text-white">
+                            <div class="text-sm opacity-90">當前關卡</div>
+                            <div class="text-2xl font-bold" id="current-stage-name">關卡 1</div>
+                            <div class="text-xs opacity-75 mt-1">
+                                📦 <span id="stage-progress-text">0/5</span> | ⏱️ <span id="stage-time-left">3:00</span>
+                            </div>
+                        </div>
+                        <div id="level-info" class="bg-white/20 backdrop-blur-sm rounded-lg px-4 py-3 text-white">
+                            <div class="text-sm opacity-90">等級</div>
+                            <div class="text-3xl font-bold" id="level">1</div>
+                            <div class="text-xs opacity-75 mt-1">
+                                <span id="level-progress">0</span>/<span id="level-target">10</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Stats Panel -->
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 shadow">
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">💰 收入</div>
+                    <div class="text-2xl font-bold text-green-600" id="money">HK$0</div>
+                </div>
+                <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 shadow">
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">📦 已完成</div>
+                    <div class="text-2xl font-bold text-primary" id="completed">0</div>
+                </div>
+                <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 shadow">
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">⭐ 評分</div>
+                    <div class="text-2xl font-bold text-yellow-500" id="rating">5.0</div>
+                </div>
+                <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 shadow">
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">⏱️ 時間</div>
+                    <div class="text-2xl font-bold text-blue-600" id="time">0:00</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Game Area -->
+        <div class="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Map Area -->
+            <div class="lg:col-span-2">
+                <div class="bg-gray-100 dark:bg-gray-800 rounded-xl shadow-lg p-4 md:p-6">
+                    <h2 class="text-xl font-bold mb-4 flex items-center justify-between">
+                        🗺️ 配送區域
+                        <span class="text-sm font-normal text-gray-600 dark:text-gray-400" id="position">位置: 倉庫</span>
+                    </h2>
+                    <div id="map" class="relative bg-green-100 dark:bg-green-900/20 rounded-lg overflow-hidden touch-action-none select-none" style="height: 500px; max-height: 70vh;">
+                        <!-- Roads -->
+                        <div class="absolute inset-0">
+                            <!-- Horizontal roads -->
+                            <div class="absolute w-full h-2 bg-gray-400 dark:bg-gray-600" style="top: 25%;"></div>
+                            <div class="absolute w-full h-2 bg-gray-400 dark:bg-gray-600" style="top: 50%;"></div>
+                            <div class="absolute w-full h-2 bg-gray-400 dark:bg-gray-600" style="top: 75%;"></div>
+                            <!-- Vertical roads -->
+                            <div class="absolute h-full w-2 bg-gray-400 dark:bg-gray-600" style="left: 25%;"></div>
+                            <div class="absolute h-full w-2 bg-gray-400 dark:bg-gray-600" style="left: 50%;"></div>
+                            <div class="absolute h-full w-2 bg-gray-400 dark:bg-gray-600" style="left: 75%;"></div>
+                        </div>
+
+                        <!-- Buildings will be added dynamically -->
+                        <div id="buildings"></div>
+
+                        <!-- Delivery Van -->
+                        <div id="van" class="absolute transition-all duration-500 ease-in-out" style="left: 10%; top: 10%; transform: translate(-50%, -50%); z-index: 100;">
+                            <div class="text-3xl sm:text-4xl delivery-animate select-none">🚚</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Orders Panel -->
+            <div class="lg:col-span-1">
+                <div class="bg-gray-100 dark:bg-gray-800 rounded-xl shadow-lg p-4 md:p-6">
+                    <h2 class="text-xl font-bold mb-4">📋 待接訂單</h2>
+
+                    <div id="orders" class="space-y-3 mb-4 max-h-64 overflow-y-auto touch-action-pan-y">
+                        <!-- Orders will be added dynamically -->
+                    </div>
+
+                    <div class="space-y-3 border-t border-gray-300 dark:border-gray-700 pt-4">
+                        <h3 class="font-bold text-lg">🚀 當前配送</h3>
+                        <div id="current-delivery" class="text-sm text-gray-600 dark:text-gray-400">
+                            暫無配送任務
+                        </div>
+                    </div>
+
+                    <div class="mt-6 space-y-2">
+                        <button id="stage-select-btn" class="w-full bg-primary hover:bg-primary/90 active:bg-primary/80 text-white font-bold py-3 px-4 rounded-lg transition text-base touch-manipulation">
+                            🎯 關卡選擇
+                        </button>
+                        <button id="auto-stage-btn" class="w-full bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-bold py-3 px-4 rounded-lg transition text-base touch-manipulation">
+                            🔁 自動闖關 1→100
+                        </button>
+                        <button id="start-btn" class="w-full bg-green-600 hover:bg-green-700 active:bg-green-800 text-white font-bold py-3 px-4 rounded-lg transition text-base touch-manipulation">
+                            🎮 自由模式
+                        </button>
+                        <button id="reset-btn" class="w-full bg-gray-500 hover:bg-gray-600 active:bg-gray-700 text-white font-bold py-3 px-4 rounded-lg transition text-base touch-manipulation">
+                            🔄 重新開始
+                        </button>
+                        <button id="tutorial-btn" class="w-full bg-blue-500 hover:bg-blue-600 active:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition text-base touch-manipulation">
+                            📖 查看教學
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Level Up Modal -->
+        <div id="levelup-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-md w-full p-6 transform transition-all">
+                <div class="text-center">
+                    <div class="text-6xl mb-4">🎉</div>
+                    <h3 class="text-2xl font-bold mb-2">等級提升！</h3>
+                    <div class="text-5xl font-bold text-primary mb-4" id="levelup-number">2</div>
+                    <p class="text-gray-600 dark:text-gray-400 mb-2" id="levelup-desc">恭喜你升級了！</p>
+                    <div class="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 mb-6">
+                        <div class="text-sm font-bold mb-2">新功能解鎖：</div>
+                        <div class="text-sm text-gray-700 dark:text-gray-300" id="levelup-unlock"></div>
+                    </div>
+                    <button onclick="closeLevelUpModal()" class="bg-primary hover:bg-primary/90 active:bg-primary/80 text-white font-bold py-2 px-6 rounded-lg touch-manipulation">
+                        繼續
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Achievement Modal -->
+        <div id="achievement-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-md w-full p-6 transform transition-all">
+                <div class="text-center">
+                    <div class="text-6xl mb-4" id="achievement-icon">🏆</div>
+                    <h3 class="text-2xl font-bold mb-2" id="achievement-title">成就達成！</h3>
+                    <p class="text-gray-600 dark:text-gray-400 mb-6" id="achievement-desc">你真棒！</p>
+                    <button onclick="closeAchievementModal()" class="bg-primary hover:bg-primary/90 active:bg-primary/80 text-white font-bold py-2 px-6 rounded-lg touch-manipulation">
+                        繼續
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tutorial Modal -->
+        <div id="tutorial-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-2xl w-full p-6 md:p-8 transform transition-all max-h-[90vh] overflow-y-auto touch-action-pan-y">
+                <div class="mb-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-2xl md:text-3xl font-bold flex items-center gap-2">
+                            <span id="tutorial-icon">📖</span>
+                            <span id="tutorial-title">遊戲教學</span>
+                        </h3>
+                        <div class="text-sm text-gray-500 dark:text-gray-400" id="tutorial-progress">1/7</div>
+                    </div>
+                    <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 mb-4">
+                        <div id="tutorial-progress-bar" class="bg-primary h-2 rounded-full transition-all duration-300" style="width: 14.29%"></div>
+                    </div>
+                </div>
+
+                <div id="tutorial-content" class="mb-6">
+                    <!-- Tutorial content will be inserted here -->
+                </div>
+
+                <div class="flex justify-between items-center gap-4">
+                    <button id="tutorial-skip" class="text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 font-medium py-2 px-4 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition touch-manipulation">
+                        略過教學
+                    </button>
+                    <div class="flex gap-3">
+                        <button id="tutorial-prev" class="bg-gray-500 hover:bg-gray-600 active:bg-gray-700 text-white font-bold py-2 px-6 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed touch-manipulation">
+                            上一步
+                        </button>
+                        <button id="tutorial-next" class="bg-primary hover:bg-primary/90 active:bg-primary/80 text-white font-bold py-2 px-6 rounded-lg transition touch-manipulation">
+                            下一步
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tutorial Highlight Overlay -->
+        <div id="tutorial-highlight" class="hidden fixed pointer-events-none z-40" style="box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6); border-radius: 8px;"></div>
+
+        <!-- Stage Selection Modal -->
+        <div id="stage-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-4xl w-full p-6 md:p-8 max-h-[90vh] overflow-y-auto touch-action-pan-y">
+                <div class="flex items-center justify-between mb-6">
+                    <h3 class="text-2xl md:text-3xl font-bold flex items-center gap-2">
+                        🎯 關卡選擇
+                    </h3>
+                    <button onclick="closeStageModal()" class="text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+
+                <div id="stage-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <!-- Stages will be added dynamically -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Stage Complete Modal -->
+        <div id="stage-complete-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-md w-full p-6 md:p-8 transform transition-all max-h-[90vh] overflow-y-auto touch-action-pan-y">
+                <div class="text-center">
+                    <div class="text-6xl mb-4">🎉</div>
+                    <h3 class="text-2xl md:text-3xl font-bold mb-4">關卡完成！</h3>
+
+                    <div class="mb-6">
+                        <div class="text-5xl mb-3" id="stage-stars-display">⭐⭐⭐</div>
+                        <div class="text-lg font-bold text-gray-700 dark:text-gray-300 mb-2" id="stage-complete-name">關卡 1</div>
+                    </div>
+
+                    <div class="bg-gray-100 dark:bg-gray-700 rounded-lg p-4 mb-6 space-y-2">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600 dark:text-gray-400">完成時間</span>
+                            <span class="font-bold" id="stage-time-result">1:30</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600 dark:text-gray-400">配送數量</span>
+                            <span class="font-bold" id="stage-deliveries-result">10</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600 dark:text-gray-400">最終評分</span>
+                            <span class="font-bold" id="stage-rating-result">5.0</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600 dark:text-gray-400">收入</span>
+                            <span class="font-bold text-green-600" id="stage-money-result">HK$500</span>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-3">
+                        <button onclick="closeStageCompleteModal()" class="flex-1 bg-gray-500 hover:bg-gray-600 active:bg-gray-700 text-white font-bold py-3 px-4 rounded-lg transition text-base touch-manipulation">
+                            返回
+                        </button>
+                        <button id="next-stage-btn" onclick="startNextStage()" class="flex-1 bg-primary hover:bg-primary/90 active:bg-primary/80 text-white font-bold py-3 px-4 rounded-lg transition text-base touch-manipulation">
+                            下一關
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stage Failed Modal -->
+        <div id="stage-failed-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-md w-full p-6 md:p-8 transform transition-all max-h-[90vh] overflow-y-auto touch-action-pan-y">
+                <div class="text-center">
+                    <div class="text-6xl mb-4">😢</div>
+                    <h3 class="text-2xl md:text-3xl font-bold mb-4 text-red-600 dark:text-red-400">關卡失敗</h3>
+
+                    <div class="text-gray-700 dark:text-gray-300 mb-6" id="stage-failed-reason">
+                        未達成目標要求
+                    </div>
+
+                    <div class="bg-gray-100 dark:bg-gray-700 rounded-lg p-4 mb-6 space-y-2">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600 dark:text-gray-400">完成時間</span>
+                            <span class="font-bold" id="stage-failed-time">1:30</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600 dark:text-gray-400">配送數量</span>
+                            <span class="font-bold" id="stage-failed-deliveries">5/10</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600 dark:text-gray-400">最終評分</span>
+                            <span class="font-bold" id="stage-failed-rating">4.5</span>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-3">
+                        <button onclick="closeStageFailedModal()" class="flex-1 bg-gray-500 hover:bg-gray-600 active:bg-gray-700 text-white font-bold py-3 px-4 rounded-lg transition text-base touch-manipulation">
+                            返回
+                        </button>
+                        <button onclick="retryStage()" class="flex-1 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white font-bold py-3 px-4 rounded-lg transition text-base touch-manipulation">
+                            重試
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Dark mode setup
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.classList.add('dark');
+        }
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', event => {
+            if (event.matches) {
+                document.documentElement.classList.add('dark');
+            } else {
+                document.documentElement.classList.remove('dark');
+            }
+        });
+
+        // Game State
+        const gameState = {
+            money: 0,
+            completed: 0,
+            rating: 5.0,
+            time: 0,
+            level: 1,
+            levelProgress: 0,
+            isRunning: false,
+            currentDelivery: null,
+            vanPosition: { x: 10, y: 10 },
+            orders: [],
+            buildings: [],
+            gameTimer: null,
+            orderTimer: null,
+            // Auto-run / autoplay for stages
+            autoRun: false,
+            autoRunInterval: null,
+            autoStageTarget: { from: 1, to: 100 },
+            unlockedAchievements: new Set(),
+            // Stage mode
+            stageMode: false,
+            currentStage: null,
+            stageProgress: {
+                unlockedStages: 1,
+                stageStars: {} // stageId: stars (1-3)
+            }
+        };
+
+        // Base level configuration for early levels (1..10). Levels beyond 10 are generated.
+        const baseLevelConfig = {
+            1: { target: 10, maxOrders: 3, orderInterval: 8000, timeBonus: 0, rewardMultiplier: 1.0 },
+            2: { target: 15, maxOrders: 4, orderInterval: 7000, timeBonus: 5, rewardMultiplier: 1.1 },
+            3: { target: 20, maxOrders: 4, orderInterval: 6000, timeBonus: 8, rewardMultiplier: 1.2 },
+            4: { target: 25, maxOrders: 5, orderInterval: 5500, timeBonus: 10, rewardMultiplier: 1.3 },
+            5: { target: 30, maxOrders: 5, orderInterval: 5000, timeBonus: 12, rewardMultiplier: 1.5 },
+            6: { target: 40, maxOrders: 6, orderInterval: 4500, timeBonus: 15, rewardMultiplier: 1.7 },
+            7: { target: 50, maxOrders: 6, orderInterval: 4000, timeBonus: 18, rewardMultiplier: 2.0 },
+            8: { target: 60, maxOrders: 7, orderInterval: 3500, timeBonus: 20, rewardMultiplier: 2.3 },
+            9: { target: 75, maxOrders: 7, orderInterval: 3000, timeBonus: 25, rewardMultiplier: 2.5 },
+            10: { target: 100, maxOrders: 8, orderInterval: 2500, timeBonus: 30, rewardMultiplier: 3.0 }
+        };
+
+        // Generate or return a config for any level up to 100.
+        function getLevelConfig(level) {
+            const l = Math.max(1, Math.min(level, 100));
+            if (baseLevelConfig[l]) return baseLevelConfig[l];
+
+            // Linear-ish growth for higher levels with sensible caps
+            const base10 = baseLevelConfig[10];
+            // target grows moderately after level 10
+            const target = Math.round(base10.target + (l - 10) * 20);
+            // maxOrders increases slowly, capped
+            const maxOrders = Math.min(8 + Math.floor((l - 10) / 10), 12);
+            // orderInterval decreases with level but has a safe minimum to avoid too-fast timers
+            const orderInterval = Math.max(1000, Math.round(8000 - (l - 1) * (7000 / 99)));
+            // small time bonus growth
+            const timeBonus = Math.round((l - 1) * 0.5);
+            // reward multiplier increases gradually, capped
+            const rewardMultiplier = Math.min(3.0 + ((l - 10) * (2.0 / 90)), 5.0);
+
+            return { target, maxOrders, orderInterval, timeBonus, rewardMultiplier };
+        }
+
+        // Stage configuration
+        const stages = [
+            {
+                id: 1,
+                name: '新手訓練',
+                description: '完成基本配送訓練',
+                difficulty: '簡單',
+                icon: '🎯',
+                objectives: {
+                    deliveries: 5,
+                    timeLimit: 180, // 3 minutes
+                    minRating: 4.0
+                },
+                stars: {
+                    bronze: { deliveries: 5, time: 180, rating: 4.0 }, // 1 star
+                    silver: { deliveries: 5, time: 150, rating: 4.5 }, // 2 stars
+                    gold: { deliveries: 5, time: 120, rating: 4.8 }    // 3 stars
+                },
+                orderInterval: 8000,
+                maxOrders: 2,
+                rewardMultiplier: 1.0
+            },
+            {
+                id: 2,
+                name: '城市快遞',
+                description: '在繁忙的城市中完成配送',
+                difficulty: '簡單',
+                icon: '🏙️',
+                objectives: {
+                    deliveries: 8,
+                    timeLimit: 240,
+                    minRating: 4.2
+                },
+                stars: {
+                    bronze: { deliveries: 8, time: 240, rating: 4.2 },
+                    silver: { deliveries: 8, time: 200, rating: 4.6 },
+                    gold: { deliveries: 8, time: 160, rating: 4.8 }
+                },
+                orderInterval: 7000,
+                maxOrders: 3,
+                rewardMultiplier: 1.1
+            },
+            {
+                id: 3,
+                name: '時間挑戰',
+                description: '在限時內完成更多配送',
+                difficulty: '中等',
+                icon: '⏱️',
+                objectives: {
+                    deliveries: 10,
+                    timeLimit: 240,
+                    minRating: 4.3
+                },
+                stars: {
+                    bronze: { deliveries: 10, time: 240, rating: 4.3 },
+                    silver: { deliveries: 10, time: 200, rating: 4.6 },
+                    gold: { deliveries: 10, time: 170, rating: 4.9 }
+                },
+                orderInterval: 6000,
+                maxOrders: 3,
+                rewardMultiplier: 1.2
+            },
+            {
+                id: 4,
+                name: '完美配送',
+                description: '保持高評分完成配送',
+                difficulty: '中等',
+                icon: '⭐',
+                objectives: {
+                    deliveries: 12,
+                    timeLimit: 300,
+                    minRating: 4.5
+                },
+                stars: {
+                    bronze: { deliveries: 12, time: 300, rating: 4.5 },
+                    silver: { deliveries: 12, time: 250, rating: 4.7 },
+                    gold: { deliveries: 12, time: 210, rating: 4.9 }
+                },
+                orderInterval: 6000,
+                maxOrders: 4,
+                rewardMultiplier: 1.3
+            },
+            {
+                id: 5,
+                name: '效率大師',
+                description: '快速處理大量訂單',
+                difficulty: '中等',
+                icon: '🚀',
+                objectives: {
+                    deliveries: 15,
+                    timeLimit: 300,
+                    minRating: 4.4
+                },
+                stars: {
+                    bronze: { deliveries: 15, time: 300, rating: 4.4 },
+                    silver: { deliveries: 15, time: 260, rating: 4.7 },
+                    gold: { deliveries: 15, time: 220, rating: 4.9 }
+                },
+                orderInterval: 5500,
+                maxOrders: 4,
+                rewardMultiplier: 1.4
+            },
+            {
+                id: 6,
+                name: '夜間快遞',
+                description: '在夜間完成緊急配送',
+                difficulty: '困難',
+                icon: '🌙',
+                objectives: {
+                    deliveries: 18,
+                    timeLimit: 360,
+                    minRating: 4.5
+                },
+                stars: {
+                    bronze: { deliveries: 18, time: 360, rating: 4.5 },
+                    silver: { deliveries: 18, time: 300, rating: 4.7 },
+                    gold: { deliveries: 18, time: 250, rating: 4.9 }
+                },
+                orderInterval: 5000,
+                maxOrders: 5,
+                rewardMultiplier: 1.6
+            },
+            {
+                id: 7,
+                name: '極速狂飆',
+                description: '極限速度挑戰',
+                difficulty: '困難',
+                icon: '⚡',
+                objectives: {
+                    deliveries: 20,
+                    timeLimit: 300,
+                    minRating: 4.6
+                },
+                stars: {
+                    bronze: { deliveries: 20, time: 300, rating: 4.6 },
+                    silver: { deliveries: 20, time: 260, rating: 4.8 },
+                    gold: { deliveries: 20, time: 220, rating: 4.9 }
+                },
+                orderInterval: 4500,
+                maxOrders: 5,
+                rewardMultiplier: 1.8
+            },
+            {
+                id: 8,
+                name: '配送之王',
+                description: '證明你是最強送貨員',
+                difficulty: '困難',
+                icon: '👑',
+                objectives: {
+                    deliveries: 25,
+                    timeLimit: 360,
+                    minRating: 4.7
+                },
+                stars: {
+                    bronze: { deliveries: 25, time: 360, rating: 4.7 },
+                    silver: { deliveries: 25, time: 310, rating: 4.8 },
+                    gold: { deliveries: 25, time: 270, rating: 4.95 }
+                },
+                orderInterval: 4000,
+                maxOrders: 6,
+                rewardMultiplier: 2.0
+            },
+            {
+                id: 9,
+                name: '傳說挑戰',
+                description: '只有傳奇才能完成',
+                difficulty: '專家',
+                icon: '🏆',
+                objectives: {
+                    deliveries: 30,
+                    timeLimit: 420,
+                    minRating: 4.8
+                },
+                stars: {
+                    bronze: { deliveries: 30, time: 420, rating: 4.8 },
+                    silver: { deliveries: 30, time: 360, rating: 4.85 },
+                    gold: { deliveries: 30, time: 310, rating: 4.95 }
+                },
+                orderInterval: 3500,
+                maxOrders: 6,
+                rewardMultiplier: 2.5
+            },
+            {
+                id: 10,
+                name: '終極試煉',
+                description: '最終的極限挑戰',
+                difficulty: '專家',
+                icon: '💎',
+                objectives: {
+                    deliveries: 40,
+                    timeLimit: 480,
+                    minRating: 4.85
+                },
+                stars: {
+                    bronze: { deliveries: 40, time: 480, rating: 4.85 },
+                    silver: { deliveries: 40, time: 420, rating: 4.9 },
+                    gold: { deliveries: 40, time: 360, rating: 4.95 }
+                },
+                orderInterval: 3000,
+                maxOrders: 7,
+                rewardMultiplier: 3.0
+            }
+        ];
+
+        // Building locations and names
+        const buildingLocations = [
+            { x: 15, y: 20, name: '📍 A棟公寓', emoji: '🏢' },
+            { x: 40, y: 20, name: '📍 B棟公寓', emoji: '🏢' },
+            { x: 65, y: 20, name: '📍 C棟公寓', emoji: '🏢' },
+            { x: 90, y: 20, name: '📍 超級市場', emoji: '🏪' },
+            { x: 15, y: 45, name: '📍 學校', emoji: '🏫' },
+            { x: 40, y: 45, name: '📍 醫院', emoji: '🏥' },
+            { x: 65, y: 45, name: '📍 餐廳', emoji: '🍽️' },
+            { x: 90, y: 45, name: '📍 辦公樓', emoji: '🏢' },
+            { x: 15, y: 70, name: '📍 酒店', emoji: '🏨' },
+            { x: 40, y: 70, name: '📍 圖書館', emoji: '📚' },
+            { x: 65, y: 70, name: '📍 咖啡館', emoji: '☕' },
+            { x: 90, y: 70, name: '📍 健身房', emoji: '💪' }
+    ];
+
+        // Get current level config (supports up to level 100)
+        function getCurrentLevelConfig() {
+            return getLevelConfig(gameState.level);
+        }
+
+        // Check and handle level up
+        function checkLevelUp() {
+            const config = getCurrentLevelConfig();
+            // Allow leveling up until 100
+            if (gameState.levelProgress >= config.target && gameState.level < 100) {
+                gameState.level++;
+                gameState.levelProgress = 0;
+                showLevelUp();
+                updateLevelDisplay();
+
+                // Restart order timer with new interval
+                if (gameState.orderTimer) {
+                    clearInterval(gameState.orderTimer);
+                    startOrderTimer();
+                }
+            }
+        }
+
+        // Show level up modal
+        function showLevelUp() {
+            const newLevel = gameState.level;
+            const config = getCurrentLevelConfig();
+            const unlocks = [];
+
+            if (newLevel === 2) unlocks.push('同時顯示更多訂單');
+            if (newLevel === 3) unlocks.push('訂單獎勵提升 20%');
+            if (newLevel === 4) unlocks.push('訂單刷新速度加快');
+            if (newLevel === 5) unlocks.push('獎勵金額提升至 1.5 倍');
+            if (newLevel === 6) unlocks.push('額外訂單位置');
+            if (newLevel === 7) unlocks.push('獎勵金額提升至 2 倍');
+            if (newLevel === 8) unlocks.push('更多訂單位置');
+            if (newLevel === 9) unlocks.push('訂單獎勵提升 2.5 倍');
+            if (newLevel === 10) unlocks.push('最高獎勵倍率 3 倍！');
+
+            document.getElementById('levelup-number').textContent = `等級 ${newLevel}`;
+            document.getElementById('levelup-desc').textContent = `你已升至等級 ${newLevel}！`;
+            document.getElementById('levelup-unlock').innerHTML = unlocks.map(u => `• ${u}`).join('<br>');
+            document.getElementById('levelup-modal').classList.remove('hidden');
+
+            // Add animation to level display
+            const levelElement = document.getElementById('level');
+            levelElement.classList.add('level-up-animation');
+            setTimeout(() => levelElement.classList.remove('level-up-animation'), 500);
+        }
+
+        // Close level up modal
+        function closeLevelUpModal() {
+            document.getElementById('levelup-modal').classList.add('hidden');
+        }
+
+        // Update level display
+        function updateLevelDisplay() {
+            const config = getCurrentLevelConfig();
+            document.getElementById('level').textContent = gameState.level;
+            document.getElementById('level-progress').textContent = gameState.levelProgress;
+            document.getElementById('level-target').textContent = config.target;
+        }
+
+        // Initialize buildings
+        function initBuildings() {
+            const buildingsContainer = document.getElementById('buildings');
+            buildingsContainer.innerHTML = '';
+            gameState.buildings = [];
+
+            buildingLocations.forEach((loc, index) => {
+                const building = document.createElement('div');
+                building.className = 'building absolute cursor-pointer touch-manipulation select-none';
+                building.style.left = `${loc.x}%`;
+                building.style.top = `${loc.y}%`;
+                building.style.transform = 'translate(-50%, -50%)';
+                building.innerHTML = `
+                    <div class="text-2xl sm:text-3xl">${loc.emoji}</div>
+                    <div class="text-xs text-center mt-1 bg-white/80 dark:bg-gray-800/80 px-2 py-1 rounded whitespace-nowrap">${loc.name.replace('📍 ', '')}</div>
+                `;
+                building.onclick = () => deliverToBuilding(index);
+                building.ontouchstart = (e) => {
+                    e.preventDefault();
+                    deliverToBuilding(index);
+                };
+                buildingsContainer.appendChild(building);
+                gameState.buildings.push({ ...loc, element: building });
+            });
+        }
+
+        // Generate random order
+        function generateOrder() {
+            const availableBuildings = gameState.buildings.filter((b, i) =>
+                !gameState.orders.some(o => o.destination === i) &&
+                (!gameState.currentDelivery || gameState.currentDelivery.destination !== i)
+            );
+
+            if (availableBuildings.length === 0) return;
+
+            const randomBuilding = availableBuildings[Math.floor(Math.random() * availableBuildings.length)];
+            const buildingIndex = gameState.buildings.findIndex(b => b === randomBuilding);
+
+            const items = ['📦 包裹', '🍕 外賣', '📄 文件', '🎁 禮物', '🛍️ 購物', '💐 鮮花'];
+            const item = items[Math.floor(Math.random() * items.length)];
+
+            const config = getCurrentLevelConfig();
+            const baseReward = Math.floor(Math.random() * 30) + 20;
+            const reward = Math.floor(baseReward * config.rewardMultiplier);
+
+            // Time limit decreases slightly with level but not too much
+            const baseTime = Math.floor(Math.random() * 30) + 30;
+            const timeLimit = Math.max(20, baseTime - Math.floor(gameState.level / 2) * 2);
+
+            const order = {
+                id: Date.now() + Math.random(),
+                item,
+                destination: buildingIndex,
+                destinationName: randomBuilding.name,
+                reward,
+                timeLimit,
+                timeRemaining: timeLimit
+            };
+
+            gameState.orders.push(order);
+            renderOrders();
+        }
+
+        // Render orders
+        function renderOrders() {
+            const ordersContainer = document.getElementById('orders');
+            ordersContainer.innerHTML = '';
+
+            if (gameState.orders.length === 0) {
+                ordersContainer.innerHTML = '<div class="text-sm text-gray-500 dark:text-gray-400">暫無新訂單...</div>';
+                return;
+            }
+
+            gameState.orders.forEach(order => {
+                const orderCard = document.createElement('div');
+                orderCard.className = 'order-card bg-white dark:bg-gray-700 rounded-lg p-3 shadow cursor-pointer hover:shadow-lg touch-manipulation';
+                orderCard.onclick = () => acceptOrder(order.id);
+                orderCard.ontouchstart = (e) => {
+                    e.preventDefault();
+                    acceptOrder(order.id);
+                };
+
+                const urgencyColor = order.timeRemaining < 20 ? 'text-red-500' : order.timeRemaining < 40 ? 'text-yellow-500' : 'text-green-500';
+
+                orderCard.innerHTML = `
+                    <div class="flex justify-between items-start mb-2">
+                        <div class="font-bold">${order.item}</div>
+                        <div class="text-green-600 dark:text-green-400 font-bold">HK$${order.reward}</div>
+                    </div>
+                    <div class="text-sm text-gray-600 dark:text-gray-300 mb-1">${order.destinationName}</div>
+                    <div class="text-xs ${urgencyColor} font-bold">⏱️ ${order.timeRemaining}秒</div>
+                `;
+                ordersContainer.appendChild(orderCard);
+            });
+        }
+
+        // Accept order
+        function acceptOrder(orderId) {
+            if (gameState.currentDelivery) {
+                showNotification('⚠️ 請先完成當前配送！', 'warning');
+                return;
+            }
+
+            const orderIndex = gameState.orders.findIndex(o => o.id === orderId);
+            if (orderIndex === -1) return;
+
+            gameState.currentDelivery = gameState.orders.splice(orderIndex, 1)[0];
+            renderOrders();
+            updateCurrentDelivery();
+
+            // Highlight destination
+            gameState.buildings[gameState.currentDelivery.destination].element.classList.add('ring-4', 'ring-primary', 'ring-offset-2');
+
+            showNotification('✅ 訂單已接受，前往目的地！', 'success');
+        }
+
+        // Update current delivery display
+        function updateCurrentDelivery() {
+            const currentDeliveryDiv = document.getElementById('current-delivery');
+
+            if (!gameState.currentDelivery) {
+                currentDeliveryDiv.innerHTML = '<div class="text-gray-500 dark:text-gray-400">暫無配送任務</div>';
+                return;
+            }
+
+            const delivery = gameState.currentDelivery;
+            const urgencyColor = delivery.timeRemaining < 20 ? 'text-red-500' : delivery.timeRemaining < 40 ? 'text-yellow-500' : 'text-green-500';
+
+            currentDeliveryDiv.innerHTML = `
+                <div class="bg-white dark:bg-gray-700 rounded-lg p-3 shadow">
+                    <div class="font-bold mb-2">${delivery.item}</div>
+                    <div class="text-sm mb-1">${delivery.destinationName}</div>
+                    <div class="text-sm mb-2">獎勵: <span class="text-green-600 dark:text-green-400 font-bold">HK$${delivery.reward}</span></div>
+                    <div class="text-sm ${urgencyColor} font-bold">剩餘: ${delivery.timeRemaining}秒</div>
+                    <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">點擊地圖上的建築物完成配送</div>
+                </div>
+            `;
+        }
+
+        // Deliver to building
+        function deliverToBuilding(buildingIndex) {
+            if (!gameState.currentDelivery) {
+                showNotification('💡 請先接受訂單！', 'info');
+                return;
+            }
+
+            if (gameState.currentDelivery.destination !== buildingIndex) {
+                showNotification('❌ 這不是正確的目的地！', 'error');
+                return;
+            }
+
+            // Move van to building
+            const building = gameState.buildings[buildingIndex];
+            moveVan(building.x, building.y);
+
+            // Complete delivery after animation
+            setTimeout(() => {
+                completeDelivery();
+            }, 600);
+        }
+
+        // Move van
+        function moveVan(x, y) {
+            const van = document.getElementById('van');
+            van.style.left = `${x}%`;
+            van.style.top = `${y}%`;
+            van.style.transform = 'translate(-50%, -50%)';
+            gameState.vanPosition = { x, y };
+            document.getElementById('position').textContent = `位置: 配送中...`;
+        }
+
+        // Complete delivery
+        function completeDelivery() {
+            if (!gameState.currentDelivery) return;
+
+            const delivery = gameState.currentDelivery;
+            let bonus = delivery.reward;
+            let ratingChange = 0;
+
+            // Calculate bonus based on time
+            if (delivery.timeRemaining > delivery.timeLimit * 0.7) {
+                bonus = Math.floor(bonus * 1.5);
+                ratingChange = 0.1;
+                showNotification('🌟 準時送達！獲得獎勵！', 'success');
+            } else if (delivery.timeRemaining > 0) {
+                showNotification('✅ 配送完成！', 'success');
+            } else {
+                bonus = Math.floor(bonus * 0.5);
+                ratingChange = -0.2;
+                showNotification('⚠️ 超時送達，獎勵減半', 'warning');
+            }
+
+            // Update stats
+            gameState.money += bonus;
+            gameState.completed++;
+            gameState.levelProgress++;
+            gameState.rating = Math.max(1, Math.min(5, gameState.rating + ratingChange));
+
+            // Remove highlight
+            gameState.buildings[delivery.destination].element.classList.remove('ring-4', 'ring-primary', 'ring-offset-2');
+
+            gameState.currentDelivery = null;
+            updateStats();
+            updateLevelDisplay();
+            updateCurrentDelivery();
+            checkLevelUp();
+
+            // Return to warehouse
+            setTimeout(() => {
+                moveVan(10, 10);
+                document.getElementById('position').textContent = '位置: 倉庫';
+            }, 500);
+
+            // Check achievements
+            checkAchievements();
+        }
+
+        // Update stats display
+        function updateStats() {
+            document.getElementById('money').textContent = `HK$${gameState.money}`;
+            document.getElementById('completed').textContent = gameState.completed;
+            document.getElementById('rating').textContent = gameState.rating.toFixed(1);
+        }
+
+        // Update game time
+        function updateTime() {
+            const minutes = Math.floor(gameState.time / 60);
+            const seconds = gameState.time % 60;
+            document.getElementById('time').textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
+
+        // Show notification
+        function showNotification(message, type) {
+            const notification = document.createElement('div');
+            notification.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white font-bold z-50 transform transition-all duration-300`;
+
+            const colors = {
+                success: 'bg-green-500',
+                error: 'bg-red-500',
+                warning: 'bg-yellow-500',
+                info: 'bg-blue-500'
+            };
+
+            notification.classList.add(colors[type] || colors.info);
+            notification.textContent = message;
+            document.body.appendChild(notification);
+
+            setTimeout(() => {
+                notification.style.opacity = '0';
+                notification.style.transform = 'translateX(100%)';
+                setTimeout(() => notification.remove(), 300);
+            }, 3000);
+        }
+
+        // Check achievements
+        function checkAchievements() {
+            const achievements = [
+                { id: 'newbie', threshold: 5, icon: '🎯', title: '新手司機', desc: '完成5次配送！' },
+                { id: 'expert', threshold: 10, icon: '🚀', title: '配送達人', desc: '完成10次配送！' },
+                { id: 'master', threshold: 20, icon: '👑', title: '配送之王', desc: '完成20次配送！' },
+                { id: 'legend', threshold: 50, icon: '🏆', title: '傳奇送貨員', desc: '完成50次配送！' },
+                { id: 'god', threshold: 100, icon: '⚡', title: '配送之神', desc: '完成100次配送！' }
+            ];
+
+            achievements.forEach(ach => {
+                if (gameState.completed === ach.threshold && !gameState.unlockedAchievements.has(ach.id)) {
+                    gameState.unlockedAchievements.add(ach.id);
+                    showAchievement(ach.icon, ach.title, ach.desc);
+                }
+            });
+
+            if (gameState.money >= 500 && !gameState.unlockedAchievements.has('money500')) {
+                gameState.unlockedAchievements.add('money500');
+                showAchievement('💰', '小有成就', '賺取 HK$500！');
+            }
+
+            if (gameState.money >= 2000 && !gameState.unlockedAchievements.has('money2000')) {
+                gameState.unlockedAchievements.add('money2000');
+                showAchievement('💎', '富有送貨員', '賺取 HK$2000！');
+            }
+
+            if (gameState.rating >= 4.8 && gameState.completed >= 10 && !gameState.unlockedAchievements.has('rating')) {
+                gameState.unlockedAchievements.add('rating');
+                showAchievement('⭐', '五星好評', '保持高評分！');
+            }
+
+            if (gameState.level >= 5 && !gameState.unlockedAchievements.has('level5')) {
+                gameState.unlockedAchievements.add('level5');
+                showAchievement('🔥', '晉級高手', '達到等級 5！');
+            }
+
+            if (gameState.level >= 10 && !gameState.unlockedAchievements.has('level10')) {
+                gameState.unlockedAchievements.add('level10');
+                showAchievement('🌟', '突破等級10', '達到等級 10！');
+            }
+
+            if (gameState.level >= 100 && !gameState.unlockedAchievements.has('level100')) {
+                gameState.unlockedAchievements.add('level100');
+                showAchievement('🏅', '滿級大師', '達到等級 100！');
+            }
+        }
+
+        // Show achievement modal
+        function showAchievement(icon, title, desc) {
+            document.getElementById('achievement-icon').textContent = icon;
+            document.getElementById('achievement-title').textContent = title;
+            document.getElementById('achievement-desc').textContent = desc;
+            document.getElementById('achievement-modal').classList.remove('hidden');
+        }
+
+        // Close achievement modal
+        function closeAchievementModal() {
+            document.getElementById('achievement-modal').classList.add('hidden');
+        }
+
+        // Start order generation timer
+        function startOrderTimer() {
+            const config = getCurrentLevelConfig();
+            gameState.orderTimer = setInterval(() => {
+                if (gameState.orders.length < config.maxOrders) {
+                    generateOrder();
+                }
+            }, config.orderInterval);
+        }
+
+        // Start game
+        function startGame() {
+            if (gameState.isRunning) return;
+
+            gameState.isRunning = true;
+            document.getElementById('start-btn').textContent = '⏸️ 遊戲進行中...';
+            document.getElementById('start-btn').disabled = true;
+            document.getElementById('start-btn').classList.add('opacity-50', 'cursor-not-allowed');
+
+            // Game timer
+            gameState.gameTimer = setInterval(() => {
+                gameState.time++;
+                updateTime();
+
+                // Update order timers
+                gameState.orders.forEach(order => {
+                    order.timeRemaining--;
+                    if (order.timeRemaining <= 0) {
+                        gameState.orders = gameState.orders.filter(o => o.id !== order.id);
+                        showNotification('📦 訂單已取消（超時）', 'warning');
+                    }
+                });
+
+                // Update current delivery timer
+                if (gameState.currentDelivery) {
+                    gameState.currentDelivery.timeRemaining--;
+                    updateCurrentDelivery();
+                }
+
+                renderOrders();
+            }, 1000);
+
+            // Start order generation
+            startOrderTimer();
+
+            // Generate initial orders
+            generateOrder();
+            setTimeout(() => generateOrder(), 3000);
+
+            showNotification('🎮 遊戲開始！接受訂單開始配送吧！', 'success');
+        }
+
+        // Reset game
+        function resetGame() {
+            // Clear timers
+            if (gameState.gameTimer) clearInterval(gameState.gameTimer);
+            if (gameState.orderTimer) clearInterval(gameState.orderTimer);
+
+            // Remove highlights
+            gameState.buildings.forEach(b => {
+                b.element.classList.remove('ring-4', 'ring-primary', 'ring-offset-2');
+            });
+
+            // Reset state (but keep stage progress)
+            gameState.money = 0;
+            gameState.completed = 0;
+            gameState.rating = 5.0;
+            gameState.time = 0;
+            gameState.level = 1;
+            gameState.levelProgress = 0;
+            gameState.isRunning = false;
+            gameState.currentDelivery = null;
+            gameState.orders = [];
+
+            // Only reset achievements in free mode
+            if (!gameState.stageMode) {
+                gameState.unlockedAchievements.clear();
+            }
+
+            // Reset van position
+            moveVan(10, 10);
+            document.getElementById('position').textContent = '位置: 倉庫';
+
+            // Reset UI to normal mode
+            document.getElementById('stage-info').classList.add('hidden');
+            document.getElementById('level-info').classList.remove('hidden');
+            document.getElementById('game-mode-text').textContent = '成為最佳送貨員！準時送達，賺取收入！';
+
+            // Update UI
+            updateStats();
+            updateTime();
+            updateLevelDisplay();
+            renderOrders();
+            updateCurrentDelivery();
+
+            document.getElementById('start-btn').textContent = '🎮 自由模式';
+            document.getElementById('start-btn').disabled = false;
+            document.getElementById('start-btn').classList.remove('opacity-50', 'cursor-not-allowed');
+
+            // Reset stage mode flag
+            gameState.stageMode = false;
+            gameState.currentStage = null;
+
+            // Stop auto-run if active
+            if (gameState.autoRunInterval) {
+                clearInterval(gameState.autoRunInterval);
+                gameState.autoRunInterval = null;
+            }
+            gameState.autoRun = false;
+            // Restore auto-stage button text/state if present
+            const autoBtn = document.getElementById('auto-stage-btn');
+            if (autoBtn) {
+                autoBtn.textContent = '🔁 自動闖關 1→100';
+                autoBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+
+            if (!gameState.stageMode) {
+                showNotification('🔄 遊戲已重置', 'info');
+            }
+        }
+
+        // Tutorial System
+        const tutorialSteps = [
+            {
+                icon: '👋',
+                title: '歡迎來到送貨模擬器！',
+                content: `
+                    <div class="space-y-4">
+                        <p class="text-lg">歡迎成為一名送貨員！在這個遊戲中，你需要：</p>
+                        <ul class="list-disc list-inside space-y-2 text-gray-700 dark:text-gray-300">
+                            <li>接受客戶的配送訂單</li>
+                            <li>將包裹準時送到指定地點</li>
+                            <li>賺取收入並提升你的評分</li>
+                            <li>升級以解鎖更多功能和獎勵</li>
+                            <li>成為城市中最優秀的送貨員！</li>
+                        </ul>
+                        <div class="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                            <p class="text-sm text-blue-800 dark:text-blue-200">💡 <strong>提示：</strong>本教學將帶你了解遊戲的���本操作</p>
+                        </div>
+                    </div>
+                `,
+                highlight: null
+            },
+            {
+                icon: '⭐',
+                title: '等級系統',
+                content: `
+                    <div class="space-y-4">
+                        <p class="text-lg mb-3">遊戲設有等級系統，讓你不斷進步：</p>
+                        <ul class="list-disc list-inside space-y-2 text-gray-700 dark:text-gray-300">
+                            <li><strong>完成配送提升等級：</strong>每完成一次配送獲得經驗</li>
+                            <li><strong>解鎖更高收益：</strong>等級越高，訂單獎勵越豐厚</li>
+                            <li><strong>更多訂單位置：</strong>高等級可同時處理更多訂單</li>
+                            <li><strong>挑戰更快節奏：</strong>訂單刷新速度隨等級加快</li>
+                        </ul>
+                        <div class="mt-4 p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
+                            <div class="text-sm text-purple-800 dark:text-purple-200 mb-2">
+                                <strong>等級獎勵範例：</strong>
+                            </div>
+                            <div class="text-xs text-gray-700 dark:text-gray-300 space-y-1">
+                                <div>• 等級 1: 基本獎勵</div>
+                                <div>• 等級 5: 獎勵提升 50%</div>
+                                <div>• 等級 10: 獎勵提升 200%！</div>
+                            </div>
+                        </div>
+                    </div>
+                `,
+                highlight: '#level'
+            },
+            {
+                icon: '📊',
+                title: '了解遊戲介面',
+                content: `
+                    <div class="space-y-4">
+                        <p class="text-lg mb-4">遊戲介面分為幾個重要區域：</p>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div class="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
+                                <div class="font-bold mb-1">💰 收入</div>
+                                <p class="text-sm text-gray-700 dark:text-gray-300">顯示你當前賺取的總金額</p>
+                            </div>
+                            <div class="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                                <div class="font-bold mb-1">📦 已完成</div>
+                                <p class="text-sm text-gray-700 dark:text-gray-300">你完成的配送訂單數量</p>
+                            </div>
+                            <div class="p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
+                                <div class="font-bold mb-1">⭐ 評分</div>
+                                <p class="text-sm text-gray-700 dark:text-gray-300">你的服務評分（1-5星）</p>
+                            </div>
+                            <div class="p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
+                                <div class="font-bold mb-1">⏱️ 時間</div>
+                                <p class="text-sm text-gray-700 dark:text-gray-300">遊戲進行的時長</p>
+                            </div>
+                        </div>
+                    </div>
+                `,
+                highlight: '.max-w-7xl > .grid.grid-cols-2'
+            },
+            {
+                icon: '🗺️',
+                title: '配送區域地圖',
+                content: `
+                    <div class="space-y-4">
+                        <p class="text-lg">地圖上顯示了所有可配送的建築物：</p>
+                        <div class="space-y-2 text-gray-700 dark:text-gray-300">
+                            <p>🏢 <strong>建築物：</strong>包括公寓、超市、學校、醫院等多個地點</p>
+                            <p>🚚 <strong>送貨車：</strong>你控制的配送車輛，當前停在倉庫</p>
+                            <p>🛣️ <strong>道路網絡：</strong>連接各個建築的道路系統</p>
+                        </div>
+                        <div class="mt-4 p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
+                            <p class="text-sm text-yellow-800 dark:text-yellow-200">💡 <strong>操作方法：</strong>點擊地圖上的建築物即可完成配送！</p>
+                        </div>
+                    </div>
+                `,
+                highlight: '#map'
+            },
+            {
+                icon: '📋',
+                title: '接受訂單',
+                content: `
+                    <div class="space-y-4">
+                        <p class="text-lg">遊戲開始後，訂單會自動出現在訂單列表中：</p>
+                        <div class="bg-gray-100 dark:bg-gray-700 rounded-lg p-4 mb-3">
+                            <div class="flex justify-between items-start mb-2">
+                                <div class="font-bold">📦 包裹</div>
+                                <div class="text-green-600 dark:text-green-400 font-bold">HK$45</div>
+                            </div>
+                            <div class="text-sm text-gray-600 dark:text-gray-300 mb-1">📍 A棟公寓</div>
+                            <div class="text-xs text-green-500 font-bold">⏱️ 50秒</div>
+                        </div>
+                        <ul class="list-disc list-inside space-y-2 text-gray-700 dark:text-gray-300">
+                            <li><strong>物品類型：</strong>顯示要配送的物品</li>
+                            <li><strong>獎勵金額：</strong>完成配送後獲得的收入</li>
+                            <li><strong>目的地：</strong>需要配送到的建築物</li>
+                            <li><strong>剩餘時間：</strong>必須在時間內完成</li>
+                        </ul>
+                        <div class="mt-4 p-4 bg-green-50 dark:bg-green-900/20 rounded-lg">
+                            <p class="text-sm text-green-800 dark:text-green-200">✅ <strong>點擊訂單卡片</strong>即可接受訂單開始配送！</p>
+                        </div>
+                    </div>
+                `,
+                highlight: '#orders'
+            },
+            {
+                icon: '🚀',
+                title: '完成配送',
+                content: `
+                    <div class="space-y-4">
+                        <p class="text-lg mb-3">接受訂單後，按照以下步驟完成配送：</p>
+                        <div class="space-y-3">
+                            <div class="flex items-start gap-3">
+                                <div class="flex-shrink-0 w-8 h-8 bg-primary text-white rounded-full flex items-center justify-center font-bold">1</div>
+                                <div>
+                                    <div class="font-bold mb-1">接受訂單</div>
+                                    <p class="text-sm text-gray-700 dark:text-gray-300">點擊待接訂單列表中的訂單卡片</p>
+                                </div>
+                            </div>
+                            <div class="flex items-start gap-3">
+                                <div class="flex-shrink-0 w-8 h-8 bg-primary text-white rounded-full flex items-center justify-center font-bold">2</div>
+                                <div>
+                                    <div class="font-bold mb-1">找到目的地</div>
+                                    <p class="text-sm text-gray-700 dark:text-gray-300">目標建築會在地圖上高亮顯示</p>
+                                </div>
+                            </div>
+                            <div class="flex items-start gap-3">
+                                <div class="flex-shrink-0 w-8 h-8 bg-primary text-white rounded-full flex items-center justify-center font-bold">3</div>
+                                <div>
+                                    <div class="font-bold mb-1">點擊建築</div>
+                                    <p class="text-sm text-gray-700 dark:text-gray-300">點擊高亮的目標建築物完成配送</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-4 p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
+                            <p class="text-sm text-purple-800 dark:text-purple-200">⚡ <strong>準時送達</strong>可獲得額外獎勵和評分加成！</p>
+                        </div>
+                    </div>
+                `,
+                highlight: '#current-delivery'
+            },
+            {
+                icon: '🏆',
+                title: '遊戲技巧與成就',
+                content: `
+                    <div class="space-y-4">
+                        <p class="text-lg mb-3"><strong>遊戲技巧：</strong></p>
+                        <ul class="list-disc list-inside space-y-2 text-gray-700 dark:text-gray-300">
+                            <li><strong>優先處理緊急訂單：</strong>剩餘時間少的訂單優先完成</li>
+                            <li><strong>規劃配送路線：</strong>選擇距離近的訂單可節省時間</li>
+                            <li><strong>準時送達：</strong>在70%時間內完成可獲得1.5倍獎勵</li>
+                            <li><strong>超時懲罰：</strong>超時送達獎勵減半，評分下降</li>
+                            <li><strong>持續升級：</strong>等級越高收益越好</li>
+                        </ul>
+                        <p class="text-lg mt-4 mb-3"><strong>成就系統：</strong></p>
+                        <div class="grid grid-cols-1 gap-2">
+                            <div class="p-3 bg-gradient-to-r from-yellow-50 to-orange-50 dark:from-yellow-900/20 dark:to-orange-900/20 rounded-lg">
+                                <p class="text-sm">🎯 <strong>新手司機：</strong>完成5次配送</p>
+                            </div>
+                            <div class="p-3 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 rounded-lg">
+                                <p class="text-sm">🚀 <strong>配送達人：</strong>完成10次配送</p>
+                            </div>
+                            <div class="p-3 bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 rounded-lg">
+                                <p class="text-sm">💰 <strong>小有成就：</strong>賺取 HK$500</p>
+                            </div>
+                            <div class="p-3 bg-gradient-to-r from-green-50 to-teal-50 dark:from-green-900/20 dark:to-teal-900/20 rounded-lg">
+                                <p class="text-sm">🌟 <strong>滿級大師：</strong>達到等級 10</p>
+                            </div>
+                        </div>
+                        <div class="mt-6 p-4 bg-green-50 dark:bg-green-900/20 rounded-lg text-center">
+                            <p class="text-lg font-bold text-green-800 dark:text-green-200">🎮 準備好開始遊戲了嗎？</p>
+                            <p class="text-sm text-gray-700 dark:text-gray-300 mt-2">點擊「開始遊戲」按鈕開始你的送貨之旅！</p>
+                        </div>
+                    </div>
+                `,
+                highlight: null
+            }
+        ];
+
+        let currentTutorialStep = 0;
+        let tutorialActive = false;
+
+        function showTutorial() {
+            tutorialActive = true;
+            currentTutorialStep = 0;
+            document.getElementById('tutorial-modal').classList.remove('hidden');
+            updateTutorialStep();
+        }
+
+        function closeTutorial() {
+            tutorialActive = false;
+            document.getElementById('tutorial-modal').classList.add('hidden');
+            document.getElementById('tutorial-highlight').classList.add('hidden');
+        }
+
+        function updateTutorialStep() {
+            const step = tutorialSteps[currentTutorialStep];
+            const totalSteps = tutorialSteps.length;
+            const progress = ((currentTutorialStep + 1) / totalSteps) * 100;
+
+            // Update content
+            document.getElementById('tutorial-icon').textContent = step.icon;
+            document.getElementById('tutorial-title').textContent = step.title;
+            document.getElementById('tutorial-content').innerHTML = step.content;
+            document.getElementById('tutorial-progress').textContent = `${currentTutorialStep + 1}/${totalSteps}`;
+            document.getElementById('tutorial-progress-bar').style.width = `${progress}%`;
+
+            // Update buttons
+            const prevBtn = document.getElementById('tutorial-prev');
+            const nextBtn = document.getElementById('tutorial-next');
+
+            prevBtn.disabled = currentTutorialStep === 0;
+
+            if (currentTutorialStep === totalSteps - 1) {
+                nextBtn.textContent = '開始遊戲';
+            } else {
+                nextBtn.textContent = '下一步';
+            }
+
+            // Update highlight
+            updateTutorialHighlight(step.highlight);
+        }
+
+        function updateTutorialHighlight(selector) {
+            const highlight = document.getElementById('tutorial-highlight');
+
+            if (!selector) {
+                highlight.classList.add('hidden');
+                return;
+            }
+
+            const element = document.querySelector(selector);
+            if (!element) {
+                highlight.classList.add('hidden');
+                return;
+            }
+
+            const rect = element.getBoundingClientRect();
+            highlight.style.left = rect.left + 'px';
+            highlight.style.top = rect.top + 'px';
+            highlight.style.width = rect.width + 'px';
+            highlight.style.height = rect.height + 'px';
+            highlight.classList.remove('hidden');
+        }
+
+        function nextTutorialStep() {
+            if (currentTutorialStep < tutorialSteps.length - 1) {
+                currentTutorialStep++;
+                updateTutorialStep();
+            } else {
+                // Last step - close tutorial and start game
+                closeTutorial();
+                if (!gameState.isRunning) {
+                    startGame();
+                }
+            }
+        }
+
+        function prevTutorialStep() {
+            if (currentTutorialStep > 0) {
+                currentTutorialStep--;
+                updateTutorialStep();
+            }
+        }
+
+        // Tutorial event listeners
+        document.getElementById('tutorial-btn').addEventListener('click', showTutorial);
+        document.getElementById('tutorial-skip').addEventListener('click', closeTutorial);
+        document.getElementById('tutorial-next').addEventListener('click', nextTutorialStep);
+        document.getElementById('tutorial-prev').addEventListener('click', prevTutorialStep);
+
+        // Show tutorial on first visit (session-based)
+        let hasSeenTutorial = false;
+        window.addEventListener('load', () => {
+            if (!hasSeenTutorial) {
+                setTimeout(() => {
+                    showTutorial();
+                    hasSeenTutorial = true;
+                }, 500);
+            }
+        });
+
+        // Update highlight position on window resize
+        window.addEventListener('resize', () => {
+            if (tutorialActive) {
+                const step = tutorialSteps[currentTutorialStep];
+                updateTutorialHighlight(step.highlight);
+            }
+        });
+
+        // ========== STAGE SYSTEM FUNCTIONS ==========
+
+        // Show stage selection modal
+        function showStageSelection() {
+            renderStageList();
+            document.getElementById('stage-modal').classList.remove('hidden');
+        }
+
+        // Close stage selection modal
+        function closeStageModal() {
+            document.getElementById('stage-modal').classList.add('hidden');
+        }
+
+        // Render stage list
+        function renderStageList() {
+            const stageList = document.getElementById('stage-list');
+            stageList.innerHTML = '';
+
+            stages.forEach(stage => {
+                const isUnlocked = stage.id <= gameState.stageProgress.unlockedStages;
+                const stars = gameState.stageProgress.stageStars[stage.id] || 0;
+
+                const difficultyColors = {
+                    '簡單': 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300',
+                    '中等': 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300',
+                    '困難': 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300',
+                    '專家': 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+                };
+
+                const stageCard = document.createElement('div');
+                stageCard.className = `relative bg-white dark:bg-gray-700 rounded-lg p-4 shadow transition-all ${
+                    isUnlocked ? 'cursor-pointer hover:shadow-xl hover:scale-105' : 'opacity-50'
+                }`;
+
+                if (isUnlocked) {
+                    stageCard.onclick = () => startStage(stage.id);
+                }
+
+                let starsDisplay = '';
+                for (let i = 0; i < 3; i++) {
+                    starsDisplay += i < stars ? '⭐' : '☆';
+                }
+
+                const minutes = Math.floor(stage.objectives.timeLimit / 60);
+                const seconds = stage.objectives.timeLimit % 60;
+                const timeText = seconds > 0 ? `${minutes}:${seconds.toString().padStart(2, '0')}` : `${minutes}:00`;
+
+                stageCard.innerHTML = `
+                    <div class="flex items-start justify-between mb-3">
+                        <div class="flex items-center gap-2">
+                            <div class="text-3xl">${stage.icon}</div>
+                            <div>
+                                <div class="font-bold text-lg">關卡 ${stage.id}</div>
+                                <div class="text-xs ${difficultyColors[stage.difficulty]} px-2 py-0.5 rounded-full inline-block mt-1">
+                                    ${stage.difficulty}
+                                </div>
+                            </div>
+                        </div>
+                        ${!isUnlocked ? '<div class="text-2xl">🔒</div>' : ''}
+                    </div>
+
+                    <h4 class="font-bold text-gray-900 dark:text-white mb-1">${stage.name}</h4>
+                    <p class="text-sm text-gray-600 dark:text-gray-300 mb-3">${stage.description}</p>
+
+                    ${stars > 0 ? `
+                        <div class="text-center mb-3 text-xl">
+                            ${starsDisplay}
+                        </div>
+                    ` : ''}
+
+                    <div class="space-y-1 text-xs text-gray-600 dark:text-gray-400">
+                        <div class="flex justify-between">
+                            <span>📦 目標配送：</span>
+                            <span class="font-bold">${stage.objectives.deliveries} 單</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span>⏱️ 時間限制：</span>
+                            <span class="font-bold">${timeText}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span>⭐ 最低評分：</span>
+                            <span class="font-bold">${stage.objectives.minRating.toFixed(1)}</span>
+                        </div>
+                    </div>
+
+                    ${isUnlocked ? `
+                        <button class="w-full mt-3 bg-primary hover:bg-primary/90 active:bg-primary/80 text-white font-bold py-2 px-3 rounded text-sm transition touch-manipulation">
+                            開始挑戰
+                        </button>
+                    ` : `
+                        <div class="w-full mt-3 bg-gray-300 dark:bg-gray-600 text-gray-500 dark:text-gray-400 font-bold py-2 px-3 rounded text-sm text-center">
+                            未解鎖
+                        </div>
+                    `}
+                `;
+
+                stageList.appendChild(stageCard);
+            });
+        }
+
+        // Start a specific stage
+        function startStage(stageId) {
+            const stage = stages.find(s => s.id === stageId);
+            if (!stage) return;
+
+            if (stageId > gameState.stageProgress.unlockedStages) {
+                showNotification('⚠️ 請先完成前面的關卡！', 'warning');
+                return;
+            }
+
+            // Reset game state
+            resetGame();
+
+            // Set stage mode
+            gameState.stageMode = true;
+            gameState.currentStage = stage;
+
+            // Close modal
+            closeStageModal();
+
+            // Start game with stage configuration
+            startGameWithStageConfig(stage);
+
+            showNotification(`🎯 ${stage.name} 開始！`, 'info');
+        }
+
+        // Start game with stage configuration
+        function startGameWithStageConfig(stage) {
+            if (gameState.isRunning) return;
+
+            gameState.isRunning = true;
+            document.getElementById('start-btn').textContent = '⏸️ 遊戲進行中...';
+            document.getElementById('start-btn').disabled = true;
+            document.getElementById('start-btn').classList.add('opacity-50', 'cursor-not-allowed');
+
+            // Update header to show stage info
+            document.getElementById('stage-info').classList.remove('hidden');
+            document.getElementById('level-info').classList.add('hidden');
+            document.getElementById('current-stage-name').textContent = `${stage.icon} ${stage.name}`;
+            document.getElementById('game-mode-text').textContent = stage.description;
+            updateStageProgressDisplay();
+
+            // Game timer
+            gameState.gameTimer = setInterval(() => {
+                gameState.time++;
+                updateTime();
+                updateStageProgressDisplay();
+
+                // Check time limit in stage mode
+                if (gameState.stageMode && gameState.time >= stage.objectives.timeLimit) {
+                    checkStageCompletion();
+                }
+
+                // Update order timers
+                gameState.orders.forEach(order => {
+                    order.timeRemaining--;
+                    if (order.timeRemaining <= 0) {
+                        gameState.orders = gameState.orders.filter(o => o.id !== order.id);
+                        showNotification('📦 訂單已取消（超時）', 'warning');
+                    }
+                });
+
+                // Update current delivery timer
+                if (gameState.currentDelivery) {
+                    gameState.currentDelivery.timeRemaining--;
+                    updateCurrentDelivery();
+                }
+
+                renderOrders();
+            }, 1000);
+
+            // Start order generation with stage config
+            gameState.orderTimer = setInterval(() => {
+                if (gameState.orders.length < stage.maxOrders) {
+                    generateOrderWithMultiplier(stage.rewardMultiplier);
+                }
+            }, stage.orderInterval);
+
+            // Generate initial orders
+            generateOrderWithMultiplier(stage.rewardMultiplier);
+            setTimeout(() => generateOrderWithMultiplier(stage.rewardMultiplier), 3000);
+        }
+
+        // Update stage progress display in header
+        function updateStageProgressDisplay() {
+            if (!gameState.stageMode || !gameState.currentStage) return;
+
+            const stage = gameState.currentStage;
+            document.getElementById('stage-progress-text').textContent =
+                `${gameState.completed}/${stage.objectives.deliveries}`;
+
+            const timeLeft = Math.max(0, stage.objectives.timeLimit - gameState.time);
+            const minutes = Math.floor(timeLeft / 60);
+            const seconds = timeLeft % 60;
+            document.getElementById('stage-time-left').textContent =
+                `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
+
+        // Generate order with custom reward multiplier
+        function generateOrderWithMultiplier(multiplier) {
+            const availableBuildings = gameState.buildings.filter((b, i) =>
+                !gameState.orders.some(o => o.destination === i) &&
+                (!gameState.currentDelivery || gameState.currentDelivery.destination !== i)
+            );
+
+            if (availableBuildings.length === 0) return;
+
+            const randomBuilding = availableBuildings[Math.floor(Math.random() * availableBuildings.length)];
+            const buildingIndex = gameState.buildings.findIndex(b => b === randomBuilding);
+
+            const items = ['📦 包裹', '🍕 外賣', '📄 文件', '🎁 禮物', '🛍️ 購物', '💐 鮮花'];
+            const item = items[Math.floor(Math.random() * items.length)];
+
+            const baseReward = Math.floor(Math.random() * 30) + 20;
+            const reward = Math.floor(baseReward * multiplier);
+
+            const baseTime = Math.floor(Math.random() * 30) + 30;
+            const timeLimit = Math.max(20, baseTime);
+
+            const order = {
+                id: Date.now() + Math.random(),
+                item,
+                destination: buildingIndex,
+                destinationName: randomBuilding.name,
+                reward,
+                timeLimit,
+                timeRemaining: timeLimit
+            };
+
+            gameState.orders.push(order);
+            renderOrders();
+        }
+
+        // Check stage completion
+        function checkStageCompletion() {
+            if (!gameState.stageMode || !gameState.currentStage) return;
+
+            const stage = gameState.currentStage;
+            const objectives = stage.objectives;
+
+            // Stop game
+            if (gameState.gameTimer) clearInterval(gameState.gameTimer);
+            if (gameState.orderTimer) clearInterval(gameState.orderTimer);
+            gameState.isRunning = false;
+
+            // Check if objectives are met
+            const deliveriesMet = gameState.completed >= objectives.deliveries;
+            const timeMet = gameState.time <= objectives.timeLimit;
+            const ratingMet = gameState.rating >= objectives.minRating;
+
+            if (deliveriesMet && timeMet && ratingMet) {
+                // Calculate stars
+                let stars = 1; // Bronze
+                if (gameState.completed >= stage.stars.gold.deliveries &&
+                    gameState.time <= stage.stars.gold.time &&
+                    gameState.rating >= stage.stars.gold.rating) {
+                    stars = 3; // Gold
+                } else if (gameState.completed >= stage.stars.silver.deliveries &&
+                           gameState.time <= stage.stars.silver.time &&
+                           gameState.rating >= stage.stars.silver.rating) {
+                    stars = 2; // Silver
+                }
+
+                // Update progress
+                const previousStars = gameState.stageProgress.stageStars[stage.id] || 0;
+                if (stars > previousStars) {
+                    gameState.stageProgress.stageStars[stage.id] = stars;
+                }
+
+                // Unlock next stage
+                if (stage.id === gameState.stageProgress.unlockedStages && stage.id < stages.length) {
+                    gameState.stageProgress.unlockedStages = stage.id + 1;
+                }
+
+                showStageComplete(stars);
+            } else {
+                showStageFailed(deliveriesMet, timeMet, ratingMet);
+            }
+        }
+
+        // Show stage complete modal
+        function showStageComplete(stars) {
+            const stage = gameState.currentStage;
+
+            let starsDisplay = '';
+            for (let i = 0; i < stars; i++) {
+                starsDisplay += '⭐';
+            }
+
+            document.getElementById('stage-stars-display').textContent = starsDisplay;
+            document.getElementById('stage-complete-name').textContent = stage.name;
+
+            const minutes = Math.floor(gameState.time / 60);
+            const seconds = gameState.time % 60;
+            document.getElementById('stage-time-result').textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+            document.getElementById('stage-deliveries-result').textContent = gameState.completed;
+            document.getElementById('stage-rating-result').textContent = gameState.rating.toFixed(1);
+            document.getElementById('stage-money-result').textContent = `HK$${gameState.money}`;
+
+            // Show/hide next stage button
+            const nextStageBtn = document.getElementById('next-stage-btn');
+            if (stage.id < stages.length) {
+                nextStageBtn.classList.remove('hidden');
+            } else {
+                nextStageBtn.classList.add('hidden');
+            }
+
+            document.getElementById('stage-complete-modal').classList.remove('hidden');
+        }
+
+        // Show stage failed modal
+        function showStageFailed(deliveriesMet, timeMet, ratingMet) {
+            const stage = gameState.currentStage;
+
+            let reasons = [];
+            if (!deliveriesMet) reasons.push(`📦 配送不足（${gameState.completed}/${stage.objectives.deliveries}）`);
+            if (!timeMet) reasons.push('⏱️ 超時');
+            if (!ratingMet) reasons.push(`⭐ 評分過低（${gameState.rating.toFixed(1)}/${stage.objectives.minRating.toFixed(1)}）`);
+
+            document.getElementById('stage-failed-reason').innerHTML = reasons.join('<br>');
+
+            const minutes = Math.floor(gameState.time / 60);
+            const seconds = gameState.time % 60;
+            document.getElementById('stage-failed-time').textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+            document.getElementById('stage-failed-deliveries').textContent = `${gameState.completed}/${stage.objectives.deliveries}`;
+            document.getElementById('stage-failed-rating').textContent = gameState.rating.toFixed(1);
+
+            document.getElementById('stage-failed-modal').classList.remove('hidden');
+        }
+
+        // Close stage complete modal
+        function closeStageCompleteModal() {
+            document.getElementById('stage-complete-modal').classList.add('hidden');
+            showStageSelection();
+        }
+
+        // Close stage failed modal
+        function closeStageFailedModal() {
+            document.getElementById('stage-failed-modal').classList.add('hidden');
+            showStageSelection();
+        }
+
+        // Start next stage
+        function startNextStage() {
+            closeStageCompleteModal();
+            const nextStageId = gameState.currentStage.id + 1;
+            if (nextStageId <= stages.length) {
+                startStage(nextStageId);
+            }
+        }
+
+        // Retry current stage
+        function retryStage() {
+            closeStageFailedModal();
+            if (gameState.currentStage) {
+                startStage(gameState.currentStage.id);
+            }
+        }
+
+        // Modified complete delivery to check stage completion
+        const originalCompleteDelivery = completeDelivery;
+        completeDelivery = function() {
+            originalCompleteDelivery();
+
+            // Check if stage objectives are met after each delivery
+            if (gameState.stageMode && gameState.currentStage) {
+                const stage = gameState.currentStage;
+                if (gameState.completed >= stage.objectives.deliveries) {
+                    setTimeout(() => {
+                        checkStageCompletion();
+                    }, 1000);
+                }
+            }
+        };
+
+        // Event listeners
+        document.getElementById('start-btn').addEventListener('click', startGame);
+        document.getElementById('reset-btn').addEventListener('click', resetGame);
+        document.getElementById('stage-select-btn').addEventListener('click', showStageSelection);
+        // Auto-stage button: toggle auto-run
+        const autoStageBtn = document.getElementById('auto-stage-btn');
+        if (autoStageBtn) {
+            autoStageBtn.addEventListener('click', () => {
+                toggleAutoStage();
+            });
+        }
+
+        // Note: Stage progress is stored in memory only (localStorage not available in iframe)
+        // Progress will be reset on page reload
+
+        // Initialize
+        initBuildings();
+        updateStats();
+        updateTime();
+        updateLevelDisplay();
+    </script>
+
+</body></html>
